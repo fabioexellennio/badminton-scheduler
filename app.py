@@ -35,6 +35,7 @@ def get_players():
 def update_players(df):
     """Update player list in Google Sheet"""
     sheet.clear()
+    df = df.fillna("")
     sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 

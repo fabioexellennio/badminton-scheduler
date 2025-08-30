@@ -77,7 +77,7 @@ if menu == "Player List":
 
         if submitted and name:
             new_row = {"Name": name, "EarlyLeave": early_leave}
-            df = df.append(new_row, ignore_index=True)
+            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             update_players(df)
             st.success(f"{name} added successfully!")
 

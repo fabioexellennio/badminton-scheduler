@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import gspread
 import random
-from google.oauth2.service_account import Credentials
 from collections import defaultdict
+from google.oauth2.service_account import Credentials
 
 # ======================
 # Google Sheets Setup
@@ -13,10 +13,9 @@ scope = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Load credentials from Streamlit Secrets (not from file)
+# Load credentials from Streamlit Secrets
 creds_dict = st.secrets["gcp_service_account"]
 creds = Credentials.from_service_account_info(dict(creds_dict), scopes=scope)
-
 client = gspread.authorize(creds)
 
 # Replace with your Google Sheet name
@@ -41,24 +40,27 @@ def update_players(df):
     sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 
-def generate_matchups(players, num_rounds=9, num_courts=2):
+def generate_matchups(players, num_rounds=9):
     """
     Generate multiple rounds of randomized doubles matchups
-    with minimal repeats (teammates or opponents).
-    Position inside the team or who is 'Team1/Team2' does not matter.
+    so that EVERY player participates in each round.
     """
+
+    if len(players) % 4 != 0:
+        raise ValueError("Number of players must be divisible by 4 for full participation per round.")
 
     teammate_history = defaultdict(int)  # (p1, p2) -> count
     match_history = defaultdict(int)     # frozenset({team1, team2}) -> count
 
     all_rounds = []
+    num_courts = len(players) // 4  # auto-calc courts
 
     for r in range(num_rounds):
         round_players = players[:]  # copy
         random.shuffle(round_players)
         round_courts = []
 
-        while len(round_players) >= 4 and len(round_courts) < num_courts:
+        for c in range(num_courts):
             best_group = None
             best_score = float("inf")
 
@@ -89,7 +91,7 @@ def generate_matchups(players, num_rounds=9, num_courts=2):
             round_courts.append(
                 {
                     "Round": r + 1,
-                    "Court": len(round_courts) + 1,
+                    "Court": c + 1,
                     "Team 1": f"{team1[0]} & {team1[1]}",
                     "Team 2": f"{team2[0]} & {team2[1]}",
                 }
@@ -141,11 +143,9 @@ elif menu == "Matchmaking":
     else:
         players = df["Name"].tolist()
 
-        # User inputs
-        num_courts = st.number_input("How many courts?", min_value=1, max_value=10, value=2)
-        num_rounds = st.number_input("How many rounds (3h session ≈ 9-12)?", min_value=1, max_value=20, value=9)
-
-        if st.button("Generate Matches"):
-            matchups = generate_matchups(players, num_rounds=num_rounds, num_courts=num_courts)
+        if len(players) % 4 != 0:
+            st.error("Number of players must be divisible by 4 (e.g., 8, 12, 16).")
+        else:
+            num_rounds = st.slider("Number of Rounds (approx. 3 hours = ~9 rounds)", 1, 20, 9)
+            matchups = generate_matchups(players, num_rounds=num_rounds)
             st.dataframe(matchups)
-            st.success("✅ Matchups generated!")

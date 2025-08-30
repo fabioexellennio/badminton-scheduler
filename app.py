@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+from collections import defaultdict
+import random
 
 # ======================
 # Google Sheets Setup
@@ -14,7 +16,6 @@ scope = [
 # Load credentials from Streamlit Secrets (not from file)
 creds_dict = st.secrets["gcp_service_account"]
 creds = Credentials.from_service_account_info(dict(creds_dict), scopes=scope)
-
 client = gspread.authorize(creds)
 
 # Replace with your Google Sheet name
@@ -39,24 +40,71 @@ def update_players(df):
     sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 
-def generate_matchups(players):
-    """Generate randomized doubles matchups with minimal repeats"""
-    import random
+def generate_matchups(players, num_rounds=9):
+    """
+    Generate multiple rounds of randomized doubles matchups
+    with minimal repeats (teammates or opponents).
+    Default = 9 rounds (~3 hours if 20min/game).
+    """
 
-    random.shuffle(players)
-    courts = []
+    teammate_history = defaultdict(int)  # (p1, p2) -> count
+    opponent_history = defaultdict(int)  # (p1, p2) -> count
 
-    for i in range(0, len(players), 4):
-        if i + 3 < len(players):
-            p1, p2, p3, p4 = players[i : i + 4]
-            courts.append(
+    all_rounds = []
+
+    for r in range(num_rounds):
+        round_players = players[:]  # copy
+        random.shuffle(round_players)
+        round_courts = []
+
+        while len(round_players) >= 4:
+            # Choose best group of 4 minimizing repeats
+            best_group = None
+            best_score = float("inf")
+
+            for _ in range(20):  # try 20 random groups
+                sample = random.sample(round_players, 4)
+                p1, p2, p3, p4 = sample
+
+                # Calculate repeat score
+                score = (
+                    teammate_history[tuple(sorted((p1, p2)))]
+                    + teammate_history[tuple(sorted((p3, p4)))]
+                    + opponent_history[tuple(sorted((p1, p3)))]
+                    + opponent_history[tuple(sorted((p1, p4)))]
+                    + opponent_history[tuple(sorted((p2, p3)))]
+                    + opponent_history[tuple(sorted((p2, p4)))]
+                )
+
+                if score < best_score:
+                    best_score = score
+                    best_group = sample
+
+            # Assign chosen group
+            p1, p2, p3, p4 = best_group
+            round_courts.append(
                 {
-                    "Court": len(courts) + 1,
+                    "Round": r + 1,
+                    "Court": len(round_courts) + 1,
                     "Team 1": f"{p1} & {p2}",
                     "Team 2": f"{p3} & {p4}",
                 }
             )
-    return pd.DataFrame(courts)
+
+            # Update history
+            teammate_history[tuple(sorted((p1, p2)))] += 1
+            teammate_history[tuple(sorted((p3, p4)))] += 1
+
+            for a, b in [(p1, p3), (p1, p4), (p2, p3), (p2, p4)]:
+                opponent_history[tuple(sorted((a, b)))] += 1
+
+            # Remove from pool
+            for p in [p1, p2, p3, p4]:
+                round_players.remove(p)
+
+        all_rounds.extend(round_courts)
+
+    return pd.DataFrame(all_rounds)
 
 
 # ======================
@@ -90,5 +138,5 @@ elif menu == "Matchmaking":
         st.warning("No players yet. Please add players in 'Player List'.")
     else:
         players = df["Name"].tolist()
-        matchups = generate_matchups(players)
+        matchups = generate_matchups(players, num_rounds=9)  # 9 rounds ≈ 3 hours
         st.dataframe(matchups)

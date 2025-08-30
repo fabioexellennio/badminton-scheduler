@@ -2,101 +2,92 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-import random
-import itertools
-import time
 
-# Config
-SHEET_NAME = "Badminton Attendance"
-WORKSHEET_NAME = "attendance"
-MAX_ROUNDS = 6  # adjust for your session length
+# ======================
+# Google Sheets Setup
+# ======================
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
 
-# Authenticate with Google Sheets
-scope = ["https://www.googleapis.com/auth/spreadsheets"]
-creds = Credentials.from_service_account_file("service_account.json", scopes=scope)
+# Load credentials from Streamlit Secrets (not from file)
+creds_dict = st.secrets["gcp_service_account"]
+creds = Credentials.from_service_account_info(dict(creds_dict), scopes=scope)
+
 client = gspread.authorize(creds)
 
-def load_players():
-    ws = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
-    data = ws.get_all_records()
+# Replace with your Google Sheet name
+SHEET_NAME = "badminton_scheduler"
+sheet = client.open(SHEET_NAME).sheet1
+
+
+# ======================
+# Functions
+# ======================
+def get_players():
+    """Fetch player list from Google Sheet"""
+    data = sheet.get_all_records()
     df = pd.DataFrame(data)
-    df = df[df["Status"].str.lower() == "attending"]
     return df
 
-def generate_schedule(players, max_rounds):
-    seen_pairs = set()
-    seen_opponents = set()
-    schedule = {}
 
-    for round_num in range(1, max_rounds + 1):
-        active = []
-        for _, row in players.iterrows():
-            leave_after = row["Leave_After"]
-            if leave_after == "" or pd.isna(leave_after):
-                active.append(row["Name"])
-            else:
-                try:
-                    if int(leave_after) >= round_num:
-                        active.append(row["Name"])
-                except:
-                    active.append(row["Name"])
+def update_players(df):
+    """Update player list in Google Sheet"""
+    sheet.clear()
+    sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
-        random.shuffle(active)
-        matches = []
-        used = set()
 
-        for i in range(0, len(active), 4):
-            group = active[i:i+4]
-            if len(group) == 4:
-                best_group = None
-                best_score = 999
+def generate_matchups(players):
+    """Generate randomized doubles matchups with minimal repeats"""
+    import random
 
-                for perm in itertools.permutations(group, 4):
-                    team1 = tuple(sorted([perm[0], perm[1]]))
-                    team2 = tuple(sorted([perm[2], perm[3]]))
-                    opps = frozenset(team1 + team2)
+    random.shuffle(players)
+    courts = []
 
-                    score = (
-                        (1 if team1 in seen_pairs else 0) +
-                        (1 if team2 in seen_pairs else 0) +
-                        (1 if opps in seen_opponents else 0)
-                    )
-                    if score < best_score:
-                        best_score = score
-                        best_group = perm
+    for i in range(0, len(players), 4):
+        if i + 3 < len(players):
+            p1, p2, p3, p4 = players[i : i + 4]
+            courts.append(
+                {
+                    "Court": len(courts) + 1,
+                    "Team 1": f"{p1} & {p2}",
+                    "Team 2": f"{p3} & {p4}",
+                }
+            )
+    return pd.DataFrame(courts)
 
-                team1 = tuple(sorted([best_group[0], best_group[1]]))
-                team2 = tuple(sorted([best_group[2], best_group[3]]))
-                opps = frozenset(team1 + team2)
 
-                seen_pairs.add(team1)
-                seen_pairs.add(team2)
-                seen_opponents.add(opps)
+# ======================
+# Streamlit App
+# ======================
+st.title("🏸 Badminton Scheduler")
 
-                matches.append((team1[0], team1[1], team2[0], team2[1]))
+menu = st.sidebar.radio("Menu", ["Player List", "Matchmaking"])
 
-        schedule[round_num] = matches
-    return schedule
+if menu == "Player List":
+    st.subheader("✅ Current Player List")
+    df = get_players()
+    st.dataframe(df)
 
-# Streamlit UI
-st.set_page_config(page_title="Badminton Scheduler", page_icon="🏸", layout="wide")
-st.title("🏸 Badminton Mexicano Scheduler")
+    with st.form("add_player_form"):
+        name = st.text_input("Enter player name")
+        early_leave = st.checkbox("Will leave early?")
+        submitted = st.form_submit_button("Add Player")
 
-auto_refresh = st.sidebar.checkbox("Auto-refresh every 30s", value=True)
+        if submitted and name:
+            new_row = {"Name": name, "EarlyLeave": early_leave}
+            df = df.append(new_row, ignore_index=True)
+            update_players(df)
+            st.success(f"{name} added successfully!")
 
-players = load_players()
-schedule = generate_schedule(players, MAX_ROUNDS)
+elif menu == "Matchmaking":
+    st.subheader("🎲 Matchmaking Generator")
+    df = get_players()
 
-st.subheader(f"Active players: {len(players)}")
-st.dataframe(players[["Name", "Leave_After"]])
-
-for rnd, matches in schedule.items():
-    st.header(f"Round {rnd}")
-    if not matches:
-        st.write("Not enough players.")
+    if df.empty:
+        st.warning("No players yet. Please add players in 'Player List'.")
     else:
-        for idx, match in enumerate(matches, 1):
-            st.write(f"Match {idx}: {match[0]} + {match[1]}  vs  {match[2]} + {match[3]}")
-
-if auto_refresh:
-    st.experimental_autorefresh(interval=30*1000)  # 30s refresh
+        players = df["Name"].tolist()
+        matchups = generate_matchups(players)
+        st.dataframe(matchups)

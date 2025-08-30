@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import gspread
-import random
-from collections import defaultdict
 from google.oauth2.service_account import Credentials
+from collections import defaultdict
+import random
 
 # ======================
 # Google Sheets Setup
@@ -13,9 +13,10 @@ scope = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Load credentials from Streamlit Secrets
+# Load credentials from Streamlit Secrets (not from file)
 creds_dict = st.secrets["gcp_service_account"]
 creds = Credentials.from_service_account_info(dict(creds_dict), scopes=scope)
+
 client = gspread.authorize(creds)
 
 # Replace with your Google Sheet name
@@ -40,32 +41,28 @@ def update_players(df):
     sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 
-def generate_matchups(players, num_rounds=9, num_courts=1):
+def generate_matchups(players, num_rounds=3, num_courts=2):
     """
-    Generate multiple rounds of randomized doubles matchups
-    Every player is included: if not divisible by 4*num_courts,
-    some get a rotating 'BYE'
+    Generate rounds where EVERY player must play.
+    Courts can be reused (batches) until all players are assigned.
+    If players % 4 != 0, one or more get 'BYE'.
     """
 
-    teammate_history = defaultdict(int)  # (p1, p2) -> count
-    match_history = defaultdict(int)     # frozenset({team1, team2}) -> count
-
+    teammate_history = defaultdict(int)
+    match_history = defaultdict(int)
     all_rounds = []
 
     for r in range(num_rounds):
         round_players = players[:]
         random.shuffle(round_players)
-        round_courts = []
 
-        # Assign requested courts
-        for c in range(num_courts):
-            if len(round_players) < 4:
-                break
-
+        matches = []
+        # make matches of 4 until done
+        while len(round_players) >= 4:
             best_group = None
             best_score = float("inf")
 
-            for _ in range(30):  # try 30 random groups
+            for _ in range(30):  # try random groups
                 if len(round_players) < 4:
                     break
                 sample = random.sample(round_players, 4)
@@ -91,35 +88,34 @@ def generate_matchups(players, num_rounds=9, num_courts=1):
                 team2 = tuple(sorted((p3, p4)))
                 match = frozenset([team1, team2])
 
-                round_courts.append(
-                    {
-                        "Round": r + 1,
-                        "Court": c + 1,
-                        "Team 1": f"{team1[0]} & {team1[1]}",
-                        "Team 2": f"{team2[0]} & {team2[1]}",
-                    }
-                )
+                matches.append((team1, team2))
 
                 teammate_history[team1] += 1
                 teammate_history[team2] += 1
                 match_history[match] += 1
 
-                for p in [p1, p2, p3, p4]:
+                for p in best_group:
                     round_players.remove(p)
 
-        # Leftovers = BYE
+        # leftovers → BYE
         if round_players:
-            bye_names = ", ".join(round_players)
-            round_courts.append(
+            matches.append(((tuple(round_players),), ("BYE",)))
+
+        # assign courts with batching
+        court = 1
+        for m in matches:
+            t1, t2 = m
+            all_rounds.append(
                 {
                     "Round": r + 1,
-                    "Court": "BYE",
-                    "Team 1": bye_names,
-                    "Team 2": "",
+                    "Court": court,
+                    "Team 1": " & ".join(t1) if len(t1) > 1 else t1[0],
+                    "Team 2": " & ".join(t2) if len(t2) > 1 else t2[0],
                 }
             )
-
-        all_rounds.extend(round_courts)
+            court += 1
+            if court > num_courts:
+                court = 1  # reuse courts (next batch)
 
     return pd.DataFrame(all_rounds)
 
@@ -155,8 +151,9 @@ elif menu == "Matchmaking":
         st.warning("No players yet. Please add players in 'Player List'.")
     else:
         players = df["Name"].tolist()
-        num_rounds = st.slider("Number of Rounds", 1, 20, 9)
-        num_courts = st.slider("Number of Courts", 1, 10, 2)
+        num_rounds = st.number_input("Number of Rounds", 1, 20, 3)
+        num_courts = st.number_input("Number of Courts", 1, 10, 2)
 
-        matchups = generate_matchups(players, num_rounds=num_rounds, num_courts=num_courts)
-        st.dataframe(matchups)
+        if st.button("Generate Matchups"):
+            matchups = generate_matchups(players, num_rounds, num_courts)
+            st.dataframe(matchups)

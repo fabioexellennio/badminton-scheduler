@@ -132,6 +132,7 @@ if menu == "Player List":
     df = get_players()
     st.dataframe(df)
 
+    # ---- Add Player ----
     with st.form("add_player_form"):
         name = st.text_input("Enter player name")
         early_leave = st.checkbox("Will leave early?")
@@ -143,6 +144,17 @@ if menu == "Player List":
             update_players(df)
             st.success(f"{name} added successfully!")
 
+    # ---- Delete Player ----
+    if not df.empty:
+        with st.form("delete_player_form"):
+            player_to_delete = st.selectbox("Select player to delete", df["Name"].tolist())
+            delete_btn = st.form_submit_button("Delete Player")
+
+            if delete_btn:
+                df = df[df["Name"] != player_to_delete].reset_index(drop=True)
+                update_players(df)
+                st.warning(f"{player_to_delete} has been removed!")
+
 elif menu == "Matchmaking":
     st.subheader("🎲 Matchmaking Generator")
     df = get_players()
@@ -151,8 +163,8 @@ elif menu == "Matchmaking":
         st.warning("No players yet. Please add players in 'Player List'.")
     else:
         players = df["Name"].tolist()
-        num_rounds = st.number_input("Number of Rounds", 1, 20, 3)
-        num_courts = st.number_input("Number of Courts", 1, 10, 2)
+        num_rounds = st.number_input("Number of Rounds", 1, 20, 9)  # default 9
+        num_courts = st.number_input("Number of Courts", 1, 10, 3)  # default 3
 
         if st.button("Generate Matchups"):
             matchups = generate_matchups(players, num_rounds, num_courts)

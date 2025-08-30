@@ -40,25 +40,28 @@ def update_players(df):
     sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 
-def generate_matchups(players, num_rounds=9):
+def generate_matchups(players, num_rounds=9, num_courts=1):
     """
     Generate multiple rounds of randomized doubles matchups
-    Every player is included: if not divisible by 4, some get a rotating 'BYE'
+    Every player is included: if not divisible by 4*num_courts,
+    some get a rotating 'BYE'
     """
 
     teammate_history = defaultdict(int)  # (p1, p2) -> count
     match_history = defaultdict(int)     # frozenset({team1, team2}) -> count
 
     all_rounds = []
-    num_courts = len(players) // 4  # max full courts
 
     for r in range(num_rounds):
         round_players = players[:]
         random.shuffle(round_players)
         round_courts = []
 
-        # Assign full courts first
+        # Assign requested courts
         for c in range(num_courts):
+            if len(round_players) < 4:
+                break
+
             best_group = None
             best_score = float("inf")
 
@@ -152,6 +155,8 @@ elif menu == "Matchmaking":
         st.warning("No players yet. Please add players in 'Player List'.")
     else:
         players = df["Name"].tolist()
-        num_rounds = st.slider("Number of Rounds (approx. 3 hours = ~9 rounds)", 1, 20, 9)
-        matchups = generate_matchups(players, num_rounds=num_rounds)
+        num_rounds = st.slider("Number of Rounds", 1, 20, 9)
+        num_courts = st.slider("Number of Courts", 1, 10, 2)
+
+        matchups = generate_matchups(players, num_rounds=num_rounds, num_courts=num_courts)
         st.dataframe(matchups)

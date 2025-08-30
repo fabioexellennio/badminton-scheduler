@@ -43,28 +43,28 @@ def update_players(df):
 def generate_matchups(players, num_rounds=9):
     """
     Generate multiple rounds of randomized doubles matchups
-    so that EVERY player participates in each round.
+    Every player is included: if not divisible by 4, some get a rotating 'BYE'
     """
-
-    if len(players) % 4 != 0:
-        raise ValueError("Number of players must be divisible by 4 for full participation per round.")
 
     teammate_history = defaultdict(int)  # (p1, p2) -> count
     match_history = defaultdict(int)     # frozenset({team1, team2}) -> count
 
     all_rounds = []
-    num_courts = len(players) // 4  # auto-calc courts
+    num_courts = len(players) // 4  # max full courts
 
     for r in range(num_rounds):
-        round_players = players[:]  # copy
+        round_players = players[:]
         random.shuffle(round_players)
         round_courts = []
 
+        # Assign full courts first
         for c in range(num_courts):
             best_group = None
             best_score = float("inf")
 
             for _ in range(30):  # try 30 random groups
+                if len(round_players) < 4:
+                    break
                 sample = random.sample(round_players, 4)
                 p1, p2, p3, p4 = sample
 
@@ -82,29 +82,39 @@ def generate_matchups(players, num_rounds=9):
                     best_score = score
                     best_group = sample
 
-            # Assign chosen group
-            p1, p2, p3, p4 = best_group
-            team1 = tuple(sorted((p1, p2)))
-            team2 = tuple(sorted((p3, p4)))
-            match = frozenset([team1, team2])
+            if best_group:
+                p1, p2, p3, p4 = best_group
+                team1 = tuple(sorted((p1, p2)))
+                team2 = tuple(sorted((p3, p4)))
+                match = frozenset([team1, team2])
 
+                round_courts.append(
+                    {
+                        "Round": r + 1,
+                        "Court": c + 1,
+                        "Team 1": f"{team1[0]} & {team1[1]}",
+                        "Team 2": f"{team2[0]} & {team2[1]}",
+                    }
+                )
+
+                teammate_history[team1] += 1
+                teammate_history[team2] += 1
+                match_history[match] += 1
+
+                for p in [p1, p2, p3, p4]:
+                    round_players.remove(p)
+
+        # Leftovers = BYE
+        if round_players:
+            bye_names = ", ".join(round_players)
             round_courts.append(
                 {
                     "Round": r + 1,
-                    "Court": c + 1,
-                    "Team 1": f"{team1[0]} & {team1[1]}",
-                    "Team 2": f"{team2[0]} & {team2[1]}",
+                    "Court": "BYE",
+                    "Team 1": bye_names,
+                    "Team 2": "",
                 }
             )
-
-            # Update histories
-            teammate_history[team1] += 1
-            teammate_history[team2] += 1
-            match_history[match] += 1
-
-            # Remove players from pool
-            for p in [p1, p2, p3, p4]:
-                round_players.remove(p)
 
         all_rounds.extend(round_courts)
 
@@ -142,10 +152,6 @@ elif menu == "Matchmaking":
         st.warning("No players yet. Please add players in 'Player List'.")
     else:
         players = df["Name"].tolist()
-
-        if len(players) % 4 != 0:
-            st.error("Number of players must be divisible by 4 (e.g., 8, 12, 16).")
-        else:
-            num_rounds = st.slider("Number of Rounds (approx. 3 hours = ~9 rounds)", 1, 20, 9)
-            matchups = generate_matchups(players, num_rounds=num_rounds)
-            st.dataframe(matchups)
+        num_rounds = st.slider("Number of Rounds (approx. 3 hours = ~9 rounds)", 1, 20, 9)
+        matchups = generate_matchups(players, num_rounds=num_rounds)
+        st.dataframe(matchups)

@@ -154,7 +154,7 @@ if menu == "Player List":
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             update_players(df)
             st.success(f"{name} added successfully!")
-            st.experimental_rerun()
+            st.rerun()  # ✅ refresh UI after adding
 
     # ---- Delete Player ----
     if not df.empty:
@@ -173,7 +173,7 @@ if menu == "Player List":
                     updated_df = current_df[current_df["Name"] != player_to_delete].reset_index(drop=True)
                     update_players(updated_df)
                     st.success(f"✅ {player_to_delete} has been removed!")
-                    st.experimental_rerun()
+                    st.rerun()  # ✅ refresh UI after delete
                 else:
                     st.error("⚠️ Player not found — please refresh and try again.")
 

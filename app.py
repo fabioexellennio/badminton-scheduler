@@ -120,6 +120,20 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
     return pd.DataFrame(all_rounds)
 
 
+def write_matchups_to_sheet(df):
+    """Write matchups to a separate sheet called 'Matchmaking'."""
+    try:
+        # Try to open the 'Matchmaking' worksheet
+        matchup_sheet = client.open(SHEET_NAME).worksheet("Matchmaking")
+    except gspread.exceptions.WorksheetNotFound:
+        # If it doesn't exist, create it
+        matchup_sheet = client.open(SHEET_NAME).add_worksheet(title="Matchmaking", rows="100", cols="10")
+
+    matchup_sheet.clear()  # Clear old data
+    df = df.fillna("")
+    matchup_sheet.update([df.columns.values.tolist()] + df.values.tolist())
+
+
 # ======================
 # Streamlit App
 # ======================
@@ -169,3 +183,7 @@ elif menu == "Matchmaking":
         if st.button("Generate Matchups"):
             matchups = generate_matchups(players, num_rounds, num_courts)
             st.dataframe(matchups)
+
+            # Write to Google Sheets
+            write_matchups_to_sheet(matchups)
+            st.success("✅ Matchmaking table has been written to the 'Matchmaking' sheet!")

@@ -13,13 +13,11 @@ scope = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Load credentials from Streamlit Secrets (not from file)
 creds_dict = st.secrets["gcp_service_account"]
 creds = Credentials.from_service_account_info(dict(creds_dict), scopes=scope)
 
 client = gspread.authorize(creds)
 
-# Replace with your Google Sheet name
 SHEET_NAME = "badminton_scheduler"
 sheet = client.open(SHEET_NAME).sheet1
 
@@ -47,7 +45,6 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
     Courts can be reused (batches) until all players are assigned.
     If players % 4 != 0, one or more get 'BYE'.
     """
-
     teammate_history = defaultdict(int)
     match_history = defaultdict(int)
     all_rounds = []
@@ -57,12 +54,11 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
         random.shuffle(round_players)
 
         matches = []
-        # make matches of 4 until done
         while len(round_players) >= 4:
             best_group = None
             best_score = float("inf")
 
-            for _ in range(30):  # try random groups
+            for _ in range(30):
                 if len(round_players) < 4:
                     break
                 sample = random.sample(round_players, 4)
@@ -89,7 +85,6 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
                 match = frozenset([team1, team2])
 
                 matches.append((team1, team2))
-
                 teammate_history[team1] += 1
                 teammate_history[team2] += 1
                 match_history[match] += 1
@@ -97,11 +92,9 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
                 for p in best_group:
                     round_players.remove(p)
 
-        # leftovers → BYE
         if round_players:
             matches.append(((tuple(round_players),), ("BYE",)))
 
-        # assign courts with batching
         court = 1
         for m in matches:
             t1, t2 = m
@@ -115,23 +108,42 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
             )
             court += 1
             if court > num_courts:
-                court = 1  # reuse courts (next batch)
+                court = 1
 
     return pd.DataFrame(all_rounds)
 
 
 def write_matchups_to_sheet(df):
-    """Write matchups to a separate sheet called 'Matchmaking'."""
+    """Write matchups to a separate sheet called 'Matchmaking' in a grouped format."""
     try:
-        # Try to open the 'Matchmaking' worksheet
         matchup_sheet = client.open(SHEET_NAME).worksheet("Matchmaking")
     except gspread.exceptions.WorksheetNotFound:
-        # If it doesn't exist, create it
-        matchup_sheet = client.open(SHEET_NAME).add_worksheet(title="Matchmaking", rows="100", cols="10")
+        matchup_sheet = client.open(SHEET_NAME).add_worksheet(title="Matchmaking", rows="500", cols="10")
 
-    matchup_sheet.clear()  # Clear old data
-    df = df.fillna("")
-    matchup_sheet.update([df.columns.values.tolist()] + df.values.tolist())
+    matchup_sheet.clear()
+
+    output_data = []
+    rounds = df["Round"].unique()
+
+    for r in rounds:
+        output_data.append([f"Round {r}"])
+        output_data.append(["Court", "Team 1", "Team 2"])
+        round_df = df[df["Round"] == r]
+        for _, row in round_df.iterrows():
+            output_data.append([row["Court"], row["Team 1"], row["Team 2"]])
+        output_data.append([])
+
+    matchup_sheet.update(output_data)
+
+
+def display_matchups_grouped(df):
+    """Display matchups in Streamlit grouped by round for readability."""
+    rounds = df["Round"].unique()
+    for r in rounds:
+        st.markdown(f"### 🏆 Round {r}")
+        round_df = df[df["Round"] == r][["Court", "Team 1", "Team 2"]]
+        st.dataframe(round_df, use_container_width=True)
+        st.markdown("---")
 
 
 # ======================
@@ -146,7 +158,6 @@ if menu == "Player List":
     df = get_players()
     st.dataframe(df)
 
-    # ---- Add Player ----
     with st.form("add_player_form"):
         name = st.text_input("Enter player name")
         early_leave = st.checkbox("Will leave early?")
@@ -158,7 +169,6 @@ if menu == "Player List":
             update_players(df)
             st.success(f"{name} added successfully!")
 
-    # ---- Delete Player ----
     if not df.empty:
         with st.form("delete_player_form"):
             player_to_delete = st.selectbox("Select player to delete", df["Name"].tolist())
@@ -177,13 +187,15 @@ elif menu == "Matchmaking":
         st.warning("No players yet. Please add players in 'Player List'.")
     else:
         players = df["Name"].tolist()
-        num_rounds = st.number_input("Number of Rounds", 1, 20, 9)  # default 9
-        num_courts = st.number_input("Number of Courts", 1, 10, 3)  # default 3
+        num_rounds = st.number_input("Number of Rounds", 1, 20, 9)
+        num_courts = st.number_input("Number of Courts", 1, 10, 3)
 
         if st.button("Generate Matchups"):
             matchups = generate_matchups(players, num_rounds, num_courts)
-            st.dataframe(matchups)
+
+            # Display grouped format in the app
+            display_matchups_grouped(matchups)
 
             # Write to Google Sheets
             write_matchups_to_sheet(matchups)
-            st.success("✅ Matchmaking table has been written to the 'Matchmaking' sheet!")
+            st.success("✅ Matchmaking table has been written to the 'Matchmaking' sheet (grouped by round)!")

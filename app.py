@@ -13,16 +13,18 @@ scope = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+# Load credentials from Streamlit Secrets
 creds_dict = st.secrets["gcp_service_account"]
 creds = Credentials.from_service_account_info(dict(creds_dict), scopes=scope)
 client = gspread.authorize(creds)
 
+# Replace with your Google Sheet name
 SHEET_NAME = "badminton_scheduler"
 sheet = client.open(SHEET_NAME).sheet1
 
 
 # ======================
-# Helper Functions
+# Functions
 # ======================
 def get_players():
     """Fetch player list from Google Sheet"""
@@ -38,13 +40,6 @@ def update_players(df):
     sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 
-def format_team(team):
-    """Convert tuple/list/str to a clean string for display"""
-    if isinstance(team, (tuple, list)):
-        return " & ".join(map(str, team))
-    return str(team)
-
-
 def generate_matchups(players, num_rounds=3, num_courts=2):
     """
     Generate rounds where EVERY player must play.
@@ -58,8 +53,8 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
     for r in range(num_rounds):
         round_players = players[:]
         random.shuffle(round_players)
-
         matches = []
+
         while len(round_players) >= 4:
             best_group = None
             best_score = float("inf")
@@ -74,11 +69,7 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
                 team2 = tuple(sorted((p3, p4)))
                 match = frozenset([team1, team2])
 
-                score = (
-                    teammate_history[team1]
-                    + teammate_history[team2]
-                    + match_history[match]
-                )
+                score = teammate_history[team1] + teammate_history[team2] + match_history[match]
 
                 if score < best_score:
                     best_score = score
@@ -99,54 +90,44 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
                 for p in best_group:
                     round_players.remove(p)
 
-        # leftovers → BYE
         if round_players:
-            matches.append((tuple(round_players), ("BYE",)))
+            matches.append(((tuple(round_players),), ("BYE",)))
 
-        # assign courts with batching
         court = 1
-        for t1, t2 in matches:
+        for m in matches:
+            t1, t2 = m
             all_rounds.append(
                 {
                     "Round": r + 1,
                     "Court": court,
-                    "Team 1": format_team(t1),
-                    "Team 2": format_team(t2),
+                    "Team 1": " & ".join(t1) if len(t1) > 1 else t1[0],
+                    "Team 2": " & ".join(t2) if len(t2) > 1 else t2[0],
                 }
             )
             court += 1
             if court > num_courts:
-                court = 1
+                court = 1  # reuse courts in next batch
 
     return pd.DataFrame(all_rounds)
 
 
 def write_matchups_to_sheet(df):
-    """Write matchups to a separate sheet called 'Matchmaking' in a grouped format"""
-    if df.empty:
-        st.warning("⚠️ Not enough players to generate matches. Need at least 4 players.")
-        return
-
+    """Write matchmaking results to a separate sheet, grouped by round."""
+    sh = client.open(SHEET_NAME)
     try:
-        matchup_sheet = client.open(SHEET_NAME).worksheet("Matchmaking")
-    except gspread.exceptions.WorksheetNotFound:
-        matchup_sheet = client.open(SHEET_NAME).add_worksheet(
-            title="Matchmaking", rows="500", cols="10"
-        )
-
-    matchup_sheet.clear()
+        matchup_sheet = sh.worksheet("Matchmaking")
+    except gspread.WorksheetNotFound:
+        matchup_sheet = sh.add_worksheet(title="Matchmaking", rows="100", cols="20")
 
     output_data = []
-    rounds = df["Round"].unique()
-
-    for r in rounds:
-        output_data.append([f"Round {r}"])
-        output_data.append(["Court", "Team 1", "Team 2"])
-        round_df = df[df["Round"] == r]
-        for _, row in round_df.iterrows():
-            output_data.append([str(row["Court"]), str(row["Team 1"]), str(row["Team 2"])])
+    for round_num in sorted(df["Round"].unique()):
+        output_data.append([f"Round {round_num}"])
+        round_data = df[df["Round"] == round_num][["Court", "Team 1", "Team 2"]]
+        output_data.append(round_data.columns.tolist())
+        output_data.extend(round_data.values.tolist())
         output_data.append([])
 
+    matchup_sheet.clear()
     matchup_sheet.update(output_data)
 
 
@@ -173,25 +154,28 @@ if menu == "Player List":
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             update_players(df)
             st.success(f"{name} added successfully!")
+            st.experimental_rerun()
 
     # ---- Delete Player ----
     if not df.empty:
         with st.form("delete_player_form"):
+            key_for_selectbox = f"delete_select_{len(df)}"
             player_to_delete = st.selectbox(
                 "Select player to delete",
                 df["Name"].tolist(),
-                key="delete_select"
+                key=key_for_selectbox
             )
             delete_btn = st.form_submit_button("Delete Player")
 
             if delete_btn:
-                current_df = get_players()  # get latest data
+                current_df = get_players()  # refresh before deleting
                 if player_to_delete in current_df["Name"].values:
                     updated_df = current_df[current_df["Name"] != player_to_delete].reset_index(drop=True)
                     update_players(updated_df)
-                    st.warning(f"{player_to_delete} has been removed!")
+                    st.success(f"✅ {player_to_delete} has been removed!")
+                    st.experimental_rerun()
                 else:
-                    st.error("⚠️ Player not found — the list may have changed. Please refresh and try again.")
+                    st.error("⚠️ Player not found — please refresh and try again.")
 
 elif menu == "Matchmaking":
     st.subheader("🎲 Matchmaking Generator")
@@ -206,14 +190,10 @@ elif menu == "Matchmaking":
 
         if st.button("Generate Matchups"):
             matchups = generate_matchups(players, num_rounds, num_courts)
+            st.dataframe(matchups)
 
-            if matchups.empty:
-                st.warning("⚠️ Could not generate matchups — check player count.")
-            else:
-                st.subheader("📋 Generated Matchups")
-                for r in matchups["Round"].unique():
-                    st.markdown(f"### Round {r}")
-                    st.dataframe(matchups[matchups["Round"] == r][["Court", "Team 1", "Team 2"]])
-
+            try:
                 write_matchups_to_sheet(matchups)
-                st.success("✅ Matchmaking table has been written to the 'Matchmaking' sheet!")
+                st.success("✅ Matchups have been written to the 'Matchmaking' sheet!")
+            except Exception as e:
+                st.error(f"❌ Failed to write to sheet: {e}")

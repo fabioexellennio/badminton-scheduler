@@ -26,10 +26,19 @@ sheet = client.open(SHEET_NAME).sheet1
 # ======================
 # Functions
 # ======================
+def clean_name(name: str) -> str:
+    """Remove non-printable characters and extra spaces from names."""
+    return "".join(ch for ch in str(name).strip() if ch.isprintable())
+
+
 def get_players():
-    """Fetch player list from Google Sheet"""
+    """Fetch player list from Google Sheet and clean names."""
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
+
+    if "Name" in df.columns:
+        df["Name"] = df["Name"].apply(clean_name)
+
     return df
 
 
@@ -37,15 +46,14 @@ def update_players(df):
     """Update player list in Google Sheet"""
     sheet.clear()
     df = df.fillna("")
+    df["Name"] = df["Name"].apply(clean_name)
     sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 
 def generate_matchups(players, num_rounds=3, num_courts=2):
-    """
-    Generate rounds where EVERY player must play.
-    Courts can be reused (batches) until all players are assigned.
-    If players % 4 != 0, one or more get 'BYE'.
-    """
+    """Generate balanced matchmaking schedule."""
+    players = [clean_name(p) for p in players]  # sanitize again
+
     teammate_history = defaultdict(int)
     match_history = defaultdict(int)
     all_rounds = []
@@ -99,7 +107,7 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
             all_rounds.append(
                 {
                     "Round": r + 1,
-                    "Court": court,
+                    "Court": str(court),
                     "Team 1": " & ".join(t1) if len(t1) > 1 else t1[0],
                     "Team 2": " & ".join(t2) if len(t2) > 1 else t2[0],
                 }
@@ -112,7 +120,7 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
 
 
 def write_matchups_to_sheet(df):
-    """Write matchmaking results to a separate sheet, grouped by round."""
+    """Write matchmaking results to a separate sheet, grouped by round (safe strings)."""
     sh = client.open(SHEET_NAME)
     try:
         matchup_sheet = sh.worksheet("Matchmaking")
@@ -123,8 +131,13 @@ def write_matchups_to_sheet(df):
     for round_num in sorted(df["Round"].unique()):
         output_data.append([f"Round {round_num}"])
         round_data = df[df["Round"] == round_num][["Court", "Team 1", "Team 2"]]
+
+        # Force everything into string format for Sheets
+        round_data = round_data.astype(str)
+
         output_data.append(round_data.columns.tolist())
-        output_data.extend(round_data.values.tolist())
+        for row in round_data.values.tolist():
+            output_data.append([str(v) for v in row])  # ✅ make sure every cell is string
         output_data.append([])
 
     matchup_sheet.clear()
@@ -150,11 +163,11 @@ if menu == "Player List":
         submitted = st.form_submit_button("Add Player")
 
         if submitted and name:
-            new_row = {"Name": name, "EarlyLeave": early_leave}
+            new_row = {"Name": clean_name(name), "EarlyLeave": early_leave}
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             update_players(df)
             st.success(f"{name} added successfully!")
-            st.rerun()  # ✅ refresh UI after adding
+            st.rerun()
 
     # ---- Delete Player ----
     if not df.empty:
@@ -168,12 +181,12 @@ if menu == "Player List":
             delete_btn = st.form_submit_button("Delete Player")
 
             if delete_btn:
-                current_df = get_players()  # refresh before deleting
+                current_df = get_players()
                 if player_to_delete in current_df["Name"].values:
                     updated_df = current_df[current_df["Name"] != player_to_delete].reset_index(drop=True)
                     update_players(updated_df)
                     st.success(f"✅ {player_to_delete} has been removed!")
-                    st.rerun()  # ✅ refresh UI after delete
+                    st.rerun()
                 else:
                     st.error("⚠️ Player not found — please refresh and try again.")
 

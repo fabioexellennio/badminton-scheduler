@@ -177,13 +177,21 @@ if menu == "Player List":
     # ---- Delete Player ----
     if not df.empty:
         with st.form("delete_player_form"):
-            player_to_delete = st.selectbox("Select player to delete", df["Name"].tolist())
+            player_to_delete = st.selectbox(
+                "Select player to delete",
+                df["Name"].tolist(),
+                key="delete_select"
+            )
             delete_btn = st.form_submit_button("Delete Player")
 
             if delete_btn:
-                df = df[df["Name"] != player_to_delete].reset_index(drop=True)
-                update_players(df)
-                st.warning(f"{player_to_delete} has been removed!")
+                current_df = get_players()  # get latest data
+                if player_to_delete in current_df["Name"].values:
+                    updated_df = current_df[current_df["Name"] != player_to_delete].reset_index(drop=True)
+                    update_players(updated_df)
+                    st.warning(f"{player_to_delete} has been removed!")
+                else:
+                    st.error("⚠️ Player not found — the list may have changed. Please refresh and try again.")
 
 elif menu == "Matchmaking":
     st.subheader("🎲 Matchmaking Generator")

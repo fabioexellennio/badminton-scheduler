@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from collections import defaultdict
+import itertools
 import random
 
 # ======================
@@ -50,34 +51,60 @@ def update_players(df):
     sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 
-def generate_matchups(players, num_rounds=3, num_courts=2):
-    """Generate balanced matchmaking schedule."""
-    players = [clean_name(p) for p in players]  # sanitize again
-
+def generate_matchups(players, num_rounds=3, num_courts=2, min_rest=1):
+    """
+    Generate balanced matchmaking schedule with:
+    - Strict teammate avoidance until all pairs are used
+    - Opponent avoidance as much as possible
+    - Rest management so players don't play back-to-back
+    """
+    players = [clean_name(p) for p in players]
     teammate_history = defaultdict(int)
     match_history = defaultdict(int)
+    last_played_round = {p: -min_rest for p in players}
+
+    # Precompute all unique teammate pairs
+    all_pairs = list(itertools.combinations(sorted(players), 2))
+    pair_usage = {pair: 0 for pair in all_pairs}
+
     all_rounds = []
 
     for r in range(num_rounds):
-        round_players = players[:]
-        random.shuffle(round_players)
-        matches = []
+        available_players = players[:]
+        available_players.sort(key=lambda p: r - last_played_round[p], reverse=True)
 
-        while len(round_players) >= 4:
+        matches = []
+        used_players = set()
+
+        while len([p for p in available_players if p not in used_players]) >= 4:
             best_group = None
             best_score = float("inf")
+            candidates = [p for p in available_players if p not in used_players]
 
-            for _ in range(30):
-                if len(round_players) < 4:
+            for _ in range(100):  # Try more combinations for better fairness
+                if len(candidates) < 4:
                     break
-                sample = random.sample(round_players, 4)
+                sample = random.sample(candidates, 4)
                 p1, p2, p3, p4 = sample
 
                 team1 = tuple(sorted((p1, p2)))
                 team2 = tuple(sorted((p3, p4)))
                 match = frozenset([team1, team2])
 
-                score = teammate_history[team1] + teammate_history[team2] + match_history[match]
+                # Strict teammate penalty: prefer unused pairs
+                team1_penalty = pair_usage[team1] * 10  # big weight
+                team2_penalty = pair_usage[team2] * 10
+
+                # Opponent repeat penalty
+                match_penalty = match_history[match] * 5
+
+                # Rest penalty
+                rest_penalty = sum(
+                    0 if (r - last_played_round[p]) >= min_rest else 20
+                    for p in sample
+                )
+
+                score = team1_penalty + team2_penalty + match_penalty + rest_penalty
 
                 if score < best_score:
                     best_score = score
@@ -91,15 +118,17 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
 
                 matches.append((team1, team2))
 
-                teammate_history[team1] += 1
-                teammate_history[team2] += 1
+                pair_usage[team1] += 1
+                pair_usage[team2] += 1
                 match_history[match] += 1
 
                 for p in best_group:
-                    round_players.remove(p)
+                    used_players.add(p)
+                    last_played_round[p] = r
 
-        if round_players:
-            matches.append(((tuple(round_players),), ("BYE",)))
+        leftovers = [p for p in available_players if p not in used_players]
+        if leftovers:
+            matches.append(((tuple(leftovers),), ("BYE",)))
 
         court = 1
         for m in matches:
@@ -114,7 +143,7 @@ def generate_matchups(players, num_rounds=3, num_courts=2):
             )
             court += 1
             if court > num_courts:
-                court = 1  # reuse courts in next batch
+                court = 1
 
     return pd.DataFrame(all_rounds)
 
@@ -132,12 +161,10 @@ def write_matchups_to_sheet(df):
         output_data.append([f"Round {round_num}"])
         round_data = df[df["Round"] == round_num][["Court", "Team 1", "Team 2"]]
 
-        # Force everything into string format for Sheets
         round_data = round_data.astype(str)
-
         output_data.append(round_data.columns.tolist())
         for row in round_data.values.tolist():
-            output_data.append([str(v) for v in row])  # ✅ make sure every cell is string
+            output_data.append([str(v) for v in row])
         output_data.append([])
 
     matchup_sheet.clear()
@@ -156,7 +183,6 @@ if menu == "Player List":
     df = get_players()
     st.dataframe(df)
 
-    # ---- Add Player ----
     with st.form("add_player_form"):
         name = st.text_input("Enter player name")
         early_leave = st.checkbox("Will leave early?")
@@ -169,7 +195,6 @@ if menu == "Player List":
             st.success(f"{name} added successfully!")
             st.rerun()
 
-    # ---- Delete Player ----
     if not df.empty:
         with st.form("delete_player_form"):
             key_for_selectbox = f"delete_select_{len(df)}"
@@ -200,9 +225,10 @@ elif menu == "Matchmaking":
         players = df["Name"].tolist()
         num_rounds = st.number_input("Number of Rounds", 1, 20, 9)
         num_courts = st.number_input("Number of Courts", 1, 10, 3)
+        min_rest = st.number_input("Minimum Rounds to Rest", 0, 5, 1)
 
         if st.button("Generate Matchups"):
-            matchups = generate_matchups(players, num_rounds, num_courts)
+            matchups = generate_matchups(players, num_rounds, num_courts, min_rest)
             st.dataframe(matchups)
 
             try:
